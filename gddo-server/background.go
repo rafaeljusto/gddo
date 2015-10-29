@@ -8,9 +8,13 @@ package main
 
 import (
 	"flag"
-	"github.com/golang/gddo/gosrc"
 	"log"
+	"net/url"
 	"time"
+
+	"github.com/golang/gddo/database"
+	"github.com/golang/gddo/gosrc"
+	"github.com/rafaeljusto/gddoexp"
 )
 
 var backgroundTasks = []*struct {
@@ -28,6 +32,11 @@ var backgroundTasks = []*struct {
 		name:     "Crawl",
 		fn:       doCrawl,
 		interval: flag.Duration("crawl_interval", 0, "Package updater sleeps for this duration between package updates. Zero disables updates."),
+	},
+	{
+		name:     "Suppress packages",
+		fn:       checkPackagesToSuppress,
+		interval: flag.Duration("suppress_packages", 0, "Suppress packages checker sleeps for this duration between checks. Zero disables checks."),
 	},
 }
 
@@ -110,5 +119,56 @@ func readGitHubUpdates() error {
 	if err := db.PutGob(key, last); err != nil {
 		return err
 	}
+	return nil
+}
+
+func checkPackagesToSuppress() error {
+	db, err := database.New()
+	if err != nil {
+		log.Println("error connecting to database:", err)
+		return err
+	}
+
+	pkgs, err := db.AllPackages()
+	if err != nil {
+		log.Println("error retrieving all packages:", err)
+		return err
+	}
+
+	var auth *gddoexp.GithubAuth
+	if gitHubCredentials != "" {
+		values, err := url.ParseQuery(gitHubCredentials)
+		if err != nil {
+			log.Println("error parsing Github auth:", err)
+			return err
+		}
+
+		auth = &gddoexp.GithubAuth{
+			ID:     values.Get("client_id"),
+			Secret: values.Get("client_secret"),
+		}
+	}
+
+	for response := range gddoexp.ShouldSuppressPackages(pkgs, db, auth) {
+		if response.Error != nil {
+			log.Printf("error while checking package “%s”: %s", response.Package.Path, err)
+			continue
+		}
+
+		if !response.Suppress {
+			continue
+		}
+
+		pkg, _, _, err := db.Get(response.Package.Path)
+		if err != nil {
+			log.Printf("error retrieving package “%s”: %s", response.Package.Path, err)
+			continue
+		}
+
+		if err := db.Put(pkg, time.Time{}, true); err != nil {
+			log.Printf("error updating package “%s”: %s", response.Package.Path, err)
+		}
+	}
+
 	return nil
 }
