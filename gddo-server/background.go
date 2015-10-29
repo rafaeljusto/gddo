@@ -150,11 +150,6 @@ func checkPackagesToSuppress() error {
 	}
 
 	for response := range gddoexp.ShouldSuppressPackages(pkgs, db, auth) {
-		if response.Error != nil {
-			log.Printf("error while checking package “%s”: %s", response.Package.Path, err)
-			continue
-		}
-
 		if !response.Suppress {
 			continue
 		}
